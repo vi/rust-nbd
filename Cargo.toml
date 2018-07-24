@@ -11,4 +11,4 @@ readme = "README.md"
 
 
 [dependencies]
-byteorder = "1.2"
+byteorder = "1.0"
