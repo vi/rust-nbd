@@ -84,6 +84,8 @@ pub mod server {
                     let mut flags = NBD_FLAG_HAS_FLAGS;
                     if export.readonly {
                         flags |= NBD_FLAG_READ_ONLY
+                    } else {
+                        flags |= NBD_FLAG_SEND_FLUSH
                     };
                     if export.resizeable {
                         flags |= NBD_FLAG_READ_ONLY
@@ -123,6 +125,58 @@ pub mod server {
                 _ => {
                     strerror("Invalid client option type");
                 }
+            }
+        }
+    }
+    
+    fn replyt<IO: Write + Read>(mut c: IO, error:u32, handle:u64) -> Result<()> {
+        c.write_u32::<BE>(0x67446698)?;
+        c.write_u32::<BE>(error)?;
+        c.write_u64::<BE>(handle)?;
+        Ok(())
+    }
+    
+    pub fn transmission<IO: Write + Read>(mut c: IO) -> Result<()> {
+        let buf = vec![0; 65536];
+        loop {
+            let magic = c.read_u32::<BE>()?;
+            if magic != 0x25609513 {
+                strerror("Invalid request magic")?;
+            }
+            let flags = c.read_u16::<BE>()?;
+            let typ = c.read_u16::<BE>()?;
+            let handle = c.read_u64::<BE>()?;
+            let offset = c.read_u64::<BE>()?;
+            let length = c.read_u32::<BE>()?;
+            
+            //eprintln!("typ={} handle={} off={} len={}", typ, handle, offset, length);
+            match typ {
+                NBD_CMD_READ => {
+                    replyt(&mut c, 0, handle);
+                    let mut remains = length as usize;
+                    while remains > 0 {
+                        let s = remains.min(buf.len());
+                        c.write_all(&buf[0..s])?;
+                        remains -= s;
+                    }
+                },
+                NBD_CMD_WRITE  => {
+                    replyt(&mut c, 38, handle);
+                },
+                NBD_CMD_DISC  => {
+                    return Ok(());
+                },
+                NBD_CMD_FLUSH => {
+                    // TODO: flush
+                    replyt(&mut c, 0, handle);
+                },
+                NBD_CMD_TRIM  => {
+                    replyt(&mut c, 38, handle);
+                },
+                NBD_CMD_WRITE_ZEROES => {
+                    replyt(&mut c, 38, handle);
+                },
+                _ => strerror("Unknown command from client")?,
             }
         }
     }
@@ -167,6 +221,13 @@ pub mod server {
     const NBD_FLAG_SEND_TRIM: u16 = (1 << 5);
     const NBD_FLAG_SEND_WRITE_ZEROES: u16 = (1 << 6);
     const NBD_FLAG_CAN_MULTI_CONN: u16 = (1 << 8);
+
+    const NBD_CMD_READ : u16 = 0;
+    const NBD_CMD_WRITE : u16= 1;
+    const NBD_CMD_DISC : u16= 2;
+    const NBD_CMD_FLUSH : u16= 3;
+    const NBD_CMD_TRIM : u16= 4;
+    const NBD_CMD_WRITE_ZEROES : u16= 6;
 
 } // mod server
 
