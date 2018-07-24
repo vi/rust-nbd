@@ -7,6 +7,6 @@ Accepts a `Read`+`Write`+`Seek` as a data to be exposed.
 
 This library is IO-agnostic, but async is not supported.
 
-See [the example](examples/server.rs).
+See [the example](https://github.com/vi/rust-nbd/blob/master/examples/server.rs).
 
 This is an early version.
