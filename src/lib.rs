@@ -10,7 +10,7 @@ extern crate byteorder;
 pub mod server {
 
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
-    use std::io::{Cursor, Error, ErrorKind, Read, Result, Write};
+    use std::io::{Cursor, Error, ErrorKind, Read, Result, Write, Seek, SeekFrom};
 
     pub fn oldstyle_header<W: Write>(mut c: W, size: u64, flags: u32) -> Result<()> {
         c.write_all(b"NBDMAGIC")?;
@@ -136,8 +136,47 @@ pub mod server {
         Ok(())
     }
     
-    pub fn transmission<IO: Write + Read>(mut c: IO) -> Result<()> {
-        let buf = vec![0; 65536];
+    fn replyte<IO: Write + Read>(mut c: IO, error:Error, handle:u64) -> Result<()> {
+        let ec = if let Some(x) = error.raw_os_error() {
+            if (x as u32) != 0 {
+                x as u32
+            } else {
+                5
+            }
+        } else {
+            5
+        };
+        replyt(&mut c, ec, handle)
+    }
+    
+    // based on https://doc.rust-lang.org/src/std/io/util.rs.html#48
+    fn mycopy<R: ?Sized, W: ?Sized>(reader: &mut R, writer: &mut W, buf:&mut[u8], mut limit:usize) -> Result<u64>
+    where R: Read, W: Write
+    {
+        let mut written = 0;
+        loop {
+            let to_read = buf.len().min(limit);
+            let len = match reader.read(&mut buf[0..to_read]) {
+                Ok(0) => return Ok(written),
+                Ok(len) => len,
+                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            };
+            writer.write_all(&buf[..len])?;
+            written += len as u64;
+            eprintln!("written={} limit={} len={}", written, limit, len);
+            limit -= len;
+            if limit == 0 { return Ok(written); }
+        }
+    }
+    
+    /// Serve given data. If readonly, use a dummy `Write` implementation.
+    ///
+    /// Should be used after `handshake`
+    pub fn transmission<IO,D>(mut c: IO, mut data:D) -> Result<()> 
+        where IO : Read + Write, D: Read+Write+Seek,
+    {
+        let mut buf = vec![0; 65536];
         loop {
             let magic = c.read_u32::<BE>()?;
             if magic != 0x25609513 {
@@ -152,22 +191,38 @@ pub mod server {
             //eprintln!("typ={} handle={} off={} len={}", typ, handle, offset, length);
             match typ {
                 NBD_CMD_READ => {
-                    replyt(&mut c, 0, handle);
-                    let mut remains = length as usize;
-                    while remains > 0 {
-                        let s = remains.min(buf.len());
-                        c.write_all(&buf[0..s])?;
-                        remains -= s;
+                    if let Err(e) = data.seek(SeekFrom::Start(offset)) {
+                        replyte(&mut c, e, handle)?;
+                    } else {
+                        replyt(&mut c, 0, handle);
+                        match mycopy(&mut data, &mut c, &mut buf, length as usize) {
+                            Err(e) => replyte(&mut c, e, handle)?,
+                            Ok(x) if x == (length as u64) => {}
+                            Ok(x) => {
+                                strerror("sudden EOF")?;
+                            }
+                        }
                     }
                 },
                 NBD_CMD_WRITE  => {
-                    replyt(&mut c, 38, handle);
+                    if let Err(e) = data.seek(SeekFrom::Start(offset)) {
+                        replyte(&mut c, e, handle)?;
+                    } else {
+                        replyt(&mut c, 0, handle);
+                        match mycopy(&mut c, &mut data, &mut buf, length as usize) {
+                            Err(e) => replyte(&mut c, e, handle)?,
+                            Ok(x) if x == (length as u64) => {}
+                            Ok(x) => {
+                                strerror("sudden EOF")?;
+                            }
+                        }
+                    }
                 },
                 NBD_CMD_DISC  => {
                     return Ok(());
                 },
                 NBD_CMD_FLUSH => {
-                    // TODO: flush
+                    data.flush();
                     replyt(&mut c, 0, handle);
                 },
                 NBD_CMD_TRIM  => {
