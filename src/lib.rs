@@ -22,6 +22,7 @@ pub mod server {
         c.write_all(b"\x00\x42\x02\x81\x86\x12\x53")?;
         c.write_u64::<BE>(size)?;
         c.write_u32::<BE>(flags)?;
+        c.flush()?;
         Ok(())
     }
 
@@ -255,6 +256,7 @@ pub mod server {
                 }
                 _ => strerror("Unknown command from client")?,
             }
+            c.flush()?;
         }
     }
 
