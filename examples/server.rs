@@ -30,9 +30,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                thread::spawn(move || {
-                    handle_client(stream);
-                });
+                handle_client(stream);
             }
             Err(_) => {
                 println!("Error");

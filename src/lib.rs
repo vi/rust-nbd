@@ -44,6 +44,7 @@ pub mod server {
         pub send_trim: bool,
     }
 
+    /// Ignores incoming export name, accepts everything
     pub fn handshake<IO: Write + Read>(mut c: IO, export: &Export) -> Result<()> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
         let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
@@ -95,6 +96,7 @@ pub mod server {
                     };
                     c.write_u16::<BE>(flags)?;
                     c.write_all(&[0; 124])?;
+                    c.flush()?;
                     return Ok(());
                 }
                 NBD_OPT_ABORT => {
