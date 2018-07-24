@@ -3,15 +3,20 @@
 //!
 //! https://github.com/NetworkBlockDevice/nbd/blob/master/doc/proto.md
 
-#![allow(unused)]
+#![deny(missing_docs)]
+#![forbid(unsafe_code)]
 
 extern crate byteorder;
 
+
+/// Items for implementing NBD server
 pub mod server {
 
+    use self::consts::*;
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
-    use std::io::{Cursor, Error, ErrorKind, Read, Result, Write, Seek, SeekFrom};
+    use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 
+    #[doc(hidden)]
     pub fn oldstyle_header<W: Write>(mut c: W, size: u64, flags: u32) -> Result<()> {
         c.write_all(b"NBDMAGIC")?;
         c.write_all(b"\x00\x42\x02\x81\x86\x12\x53")?;
@@ -35,12 +40,18 @@ pub mod server {
         Ok(())
     }
 
+    /// Information about an export (currently only one export is supported), for handshake
     #[derive(Debug, Default)]
     pub struct Export {
+        /// Size of the underlying data, in bytes
         pub size: u64,
+        /// Tell client it's readonly
         pub readonly: bool,
+        /// Tell that NBD_CMD_RESIZE should be supported. Not implemented in this library currently
         pub resizeable: bool,
+        /// Tell that the exposed device has slow seeks, hence clients should use elevator algorithm
         pub rotational: bool,
+        /// Tell that NBD_CMD_TRIM operation is supported. Not implemented in this library currently
         pub send_trim: bool,
     }
 
@@ -51,7 +62,7 @@ pub mod server {
 
         c.write_all(b"NBDMAGIC")?;
         c.write_all(b"IHAVEOPT")?;
-        c.write_u16::<BE>(hs_flags);
+        c.write_u16::<BE>(hs_flags)?;
         c.flush()?;
 
         let client_flags = c.read_u32::<BE>()?;
@@ -117,26 +128,26 @@ pub mod server {
                     strerror("TLS not supported")?;
                 }
                 NBD_OPT_INFO => {
-                    reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"");
+                    reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"")?;
                 }
                 NBD_OPT_GO => {
-                    reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"");
+                    reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"")?;
                 }
                 _ => {
-                    strerror("Invalid client option type");
+                    strerror("Invalid client option type")?;
                 }
             }
         }
     }
-    
-    fn replyt<IO: Write + Read>(mut c: IO, error:u32, handle:u64) -> Result<()> {
+
+    fn replyt<IO: Write + Read>(mut c: IO, error: u32, handle: u64) -> Result<()> {
         c.write_u32::<BE>(0x67446698)?;
         c.write_u32::<BE>(error)?;
         c.write_u64::<BE>(handle)?;
         Ok(())
     }
-    
-    fn replyte<IO: Write + Read>(mut c: IO, error:Error, handle:u64) -> Result<()> {
+
+    fn replyte<IO: Write + Read>(mut c: IO, error: Error, handle: u64) -> Result<()> {
         let ec = if let Some(x) = error.raw_os_error() {
             if (x as u32) != 0 {
                 x as u32
@@ -148,10 +159,17 @@ pub mod server {
         };
         replyt(&mut c, ec, handle)
     }
-    
+
     // based on https://doc.rust-lang.org/src/std/io/util.rs.html#48
-    fn mycopy<R: ?Sized, W: ?Sized>(reader: &mut R, writer: &mut W, buf:&mut[u8], mut limit:usize) -> Result<u64>
-    where R: Read, W: Write
+    fn mycopy<R: ?Sized, W: ?Sized>(
+        reader: &mut R,
+        writer: &mut W,
+        buf: &mut [u8],
+        mut limit: usize,
+    ) -> Result<u64>
+    where
+        R: Read,
+        W: Write,
     {
         let mut written = 0;
         loop {
@@ -166,15 +184,19 @@ pub mod server {
             written += len as u64;
             eprintln!("written={} limit={} len={}", written, limit, len);
             limit -= len;
-            if limit == 0 { return Ok(written); }
+            if limit == 0 {
+                return Ok(written);
+            }
         }
     }
-    
+
     /// Serve given data. If readonly, use a dummy `Write` implementation.
     ///
     /// Should be used after `handshake`
-    pub fn transmission<IO,D>(mut c: IO, mut data:D) -> Result<()> 
-        where IO : Read + Write, D: Read+Write+Seek,
+    pub fn transmission<IO, D>(mut c: IO, mut data: D) -> Result<()>
+    where
+        IO: Read + Write,
+        D: Read + Write + Seek,
     {
         let mut buf = vec![0; 65536];
         loop {
@@ -182,107 +204,112 @@ pub mod server {
             if magic != 0x25609513 {
                 strerror("Invalid request magic")?;
             }
-            let flags = c.read_u16::<BE>()?;
+            let _flags = c.read_u16::<BE>()?;
             let typ = c.read_u16::<BE>()?;
             let handle = c.read_u64::<BE>()?;
             let offset = c.read_u64::<BE>()?;
             let length = c.read_u32::<BE>()?;
-            
+
             //eprintln!("typ={} handle={} off={} len={}", typ, handle, offset, length);
             match typ {
                 NBD_CMD_READ => {
                     if let Err(e) = data.seek(SeekFrom::Start(offset)) {
                         replyte(&mut c, e, handle)?;
                     } else {
-                        replyt(&mut c, 0, handle);
+                        replyt(&mut c, 0, handle)?;
                         match mycopy(&mut data, &mut c, &mut buf, length as usize) {
                             Err(e) => replyte(&mut c, e, handle)?,
                             Ok(x) if x == (length as u64) => {}
-                            Ok(x) => {
+                            Ok(_) => {
                                 strerror("sudden EOF")?;
                             }
                         }
                     }
-                },
-                NBD_CMD_WRITE  => {
+                }
+                NBD_CMD_WRITE => {
                     if let Err(e) = data.seek(SeekFrom::Start(offset)) {
                         replyte(&mut c, e, handle)?;
                     } else {
-                        replyt(&mut c, 0, handle);
+                        replyt(&mut c, 0, handle)?;
                         match mycopy(&mut c, &mut data, &mut buf, length as usize) {
                             Err(e) => replyte(&mut c, e, handle)?,
                             Ok(x) if x == (length as u64) => {}
-                            Ok(x) => {
+                            Ok(_) => {
                                 strerror("sudden EOF")?;
                             }
                         }
                     }
-                },
-                NBD_CMD_DISC  => {
+                }
+                NBD_CMD_DISC => {
                     return Ok(());
-                },
+                }
                 NBD_CMD_FLUSH => {
-                    data.flush();
-                    replyt(&mut c, 0, handle);
-                },
-                NBD_CMD_TRIM  => {
-                    replyt(&mut c, 38, handle);
-                },
+                    data.flush()?;
+                    replyt(&mut c, 0, handle)?;
+                }
+                NBD_CMD_TRIM => {
+                    replyt(&mut c, 38, handle)?;
+                }
                 NBD_CMD_WRITE_ZEROES => {
-                    replyt(&mut c, 38, handle);
-                },
+                    replyt(&mut c, 38, handle)?;
+                }
                 _ => strerror("Unknown command from client")?,
             }
         }
     }
 
+    /// Recommended port for NBD servers, especially with new handshake format.
+    /// There is some untested, doc-hidden old handshake support in this library.
     pub const DEFAULT_TCP_PORT: u16 = 10809;
 
-    const NBD_OPT_EXPORT_NAME: u32 = 1;
-    const NBD_OPT_ABORT: u32 = 2;
-    const NBD_OPT_LIST: u32 = 3;
-    const NBD_OPT_STARTTLS: u32 = 5;
-    const NBD_OPT_INFO: u32 = 6;
-    const NBD_OPT_GO: u32 = 7;
+    #[allow(dead_code)]
+    mod consts {
+        pub const NBD_OPT_EXPORT_NAME: u32 = 1;
+        pub const NBD_OPT_ABORT: u32 = 2;
+        pub const NBD_OPT_LIST: u32 = 3;
+        pub const NBD_OPT_STARTTLS: u32 = 5;
+        pub const NBD_OPT_INFO: u32 = 6;
+        pub const NBD_OPT_GO: u32 = 7;
 
-    const NBD_REP_ACK: u32 = 1;
-    const NBD_REP_SERVER: u32 = 2;
-    const NBD_REP_INFO: u32 = 3;
-    const NBD_REP_FLAG_ERROR: u32 = (1 << 31);
-    const NBD_REP_ERR_UNSUP: u32 = (1 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_POLICY: u32 = (2 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_INVALID: u32 = (3 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_PLATFORM: u32 = (4 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_TLS_REQD: u32 = (5 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_UNKNOWN: u32 = (6 | NBD_REP_FLAG_ERROR);
-    const NBD_REP_ERR_BLOCK_SIZE_REQD: u32 = (8 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ACK: u32 = 1;
+        pub const NBD_REP_SERVER: u32 = 2;
+        pub const NBD_REP_INFO: u32 = 3;
+        pub const NBD_REP_FLAG_ERROR: u32 = (1 << 31);
+        pub const NBD_REP_ERR_UNSUP: u32 = (1 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_POLICY: u32 = (2 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_INVALID: u32 = (3 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_PLATFORM: u32 = (4 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_TLS_REQD: u32 = (5 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_UNKNOWN: u32 = (6 | NBD_REP_FLAG_ERROR);
+        pub const NBD_REP_ERR_BLOCK_SIZE_REQD: u32 = (8 | NBD_REP_FLAG_ERROR);
 
-    const NBD_FLAG_FIXED_NEWSTYLE: u16 = (1 << 0);
-    const NBD_FLAG_NO_ZEROES: u16 = (1 << 1);
+        pub const NBD_FLAG_FIXED_NEWSTYLE: u16 = (1 << 0);
+        pub const NBD_FLAG_NO_ZEROES: u16 = (1 << 1);
 
-    const NBD_FLAG_C_FIXED_NEWSTYLE: u32 = NBD_FLAG_FIXED_NEWSTYLE as u32;
-    const NBD_FLAG_C_NO_ZEROES: u32 = NBD_FLAG_NO_ZEROES as u32;
+        pub const NBD_FLAG_C_FIXED_NEWSTYLE: u32 = NBD_FLAG_FIXED_NEWSTYLE as u32;
+        pub const NBD_FLAG_C_NO_ZEROES: u32 = NBD_FLAG_NO_ZEROES as u32;
 
-    const NBD_INFO_EXPORT: u16 = 0;
-    const NBD_INFO_NAME: u16 = 1;
-    const NBD_INFO_DESCRIPTION: u16 = 2;
-    const NBD_INFO_BLOCK_SIZE: u16 = 3;
+        pub const NBD_INFO_EXPORT: u16 = 0;
+        pub const NBD_INFO_NAME: u16 = 1;
+        pub const NBD_INFO_DESCRIPTION: u16 = 2;
+        pub const NBD_INFO_BLOCK_SIZE: u16 = 3;
 
-    const NBD_FLAG_HAS_FLAGS: u16 = (1 << 0);
-    const NBD_FLAG_READ_ONLY: u16 = (1 << 1);
-    const NBD_FLAG_SEND_FLUSH: u16 = (1 << 2);
-    const NBD_FLAG_SEND_FUA: u16 = (1 << 3);
-    const NBD_FLAG_ROTATIONAL: u16 = (1 << 4);
-    const NBD_FLAG_SEND_TRIM: u16 = (1 << 5);
-    const NBD_FLAG_SEND_WRITE_ZEROES: u16 = (1 << 6);
-    const NBD_FLAG_CAN_MULTI_CONN: u16 = (1 << 8);
+        pub const NBD_FLAG_HAS_FLAGS: u16 = (1 << 0);
+        pub const NBD_FLAG_READ_ONLY: u16 = (1 << 1);
+        pub const NBD_FLAG_SEND_FLUSH: u16 = (1 << 2);
+        pub const NBD_FLAG_SEND_FUA: u16 = (1 << 3);
+        pub const NBD_FLAG_ROTATIONAL: u16 = (1 << 4);
+        pub const NBD_FLAG_SEND_TRIM: u16 = (1 << 5);
+        pub const NBD_FLAG_SEND_WRITE_ZEROES: u16 = (1 << 6);
+        pub const NBD_FLAG_CAN_MULTI_CONN: u16 = (1 << 8);
 
-    const NBD_CMD_READ : u16 = 0;
-    const NBD_CMD_WRITE : u16= 1;
-    const NBD_CMD_DISC : u16= 2;
-    const NBD_CMD_FLUSH : u16= 3;
-    const NBD_CMD_TRIM : u16= 4;
-    const NBD_CMD_WRITE_ZEROES : u16= 6;
+        pub const NBD_CMD_READ: u16 = 0;
+        pub const NBD_CMD_WRITE: u16 = 1;
+        pub const NBD_CMD_DISC: u16 = 2;
+        pub const NBD_CMD_FLUSH: u16 = 3;
+        pub const NBD_CMD_TRIM: u16 = 4;
+        pub const NBD_CMD_WRITE_ZEROES: u16 = 6;
+    }
 
 } // mod server
 

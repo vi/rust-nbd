@@ -1,13 +1,11 @@
-#![allow(unused)]
 extern crate nbd;
 
-use std::io::{Read,Write,Result,Cursor};
+use std::io::{Cursor, Result};
 use std::net::{TcpListener, TcpStream};
-use std::thread;
 
-use nbd::server::{handshake, Export, transmission};
+use nbd::server::{handshake, transmission, Export};
 
-fn handle_client(data: &mut[u8], mut stream: TcpStream) -> Result<()> {
+fn handle_client(data: &mut [u8], mut stream: TcpStream) -> Result<()> {
     let e = Export {
         size: data.len() as u64,
         readonly: false,
@@ -25,14 +23,12 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => {
-                match handle_client(&mut data, stream) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        eprintln!("error: {}", e);
-                    }
+            Ok(stream) => match handle_client(&mut data, stream) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("error: {}", e);
                 }
-            }
+            },
             Err(_) => {
                 println!("Error");
             }
