@@ -8,27 +8,43 @@
 
 extern crate byteorder;
 
+/// Information about an export (without name)
+#[derive(Debug, Default, Hash, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Export {
+    /// Size of the underlying data, in bytes
+    pub size: u64,
+    /// Tell client it's readonly
+    pub readonly: bool,
+    /// Tell that NBD_CMD_RESIZE should be supported. Not implemented in this library currently
+    pub resizeable: bool,
+    /// Tell that the exposed device has slow seeks, hence clients should use elevator algorithm
+    pub rotational: bool,
+    /// Tell that NBD_CMD_TRIM operation is supported. Not implemented in this library currently
+    pub send_trim: bool,
+}
+
+fn strerror(s: &'static str) -> std::io::Result<()> {
+    let stderr: Box<::std::error::Error + Send + Sync> = s.into();
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, stderr))
+}
 
 /// Items for implementing NBD server
 pub mod server {
 
-    use self::consts::*;
+    use super::consts::*;
+    use super::strerror;
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
     use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 
     #[doc(hidden)]
     pub fn oldstyle_header<W: Write>(mut c: W, size: u64, flags: u32) -> Result<()> {
         c.write_all(b"NBDMAGIC")?;
-        c.write_all(b"\x00\x42\x02\x81\x86\x12\x53")?;
+        c.write_all(b"\x00\x00\x42\x02\x81\x86\x12\x53")?;
         c.write_u64::<BE>(size)?;
         c.write_u32::<BE>(flags)?;
+        c.write_all(&[0; 124])?;
         c.flush()?;
         Ok(())
-    }
-
-    fn strerror(s: &'static str) -> Result<()> {
-        let stderr: Box<::std::error::Error + Send + Sync> = s.into();
-        Err(Error::new(ErrorKind::InvalidData, stderr))
     }
 
     fn reply<IO: Write + Read>(mut c: IO, clopt: u32, rtype: u32, data: &[u8]) -> Result<()> {
@@ -41,22 +57,10 @@ pub mod server {
         Ok(())
     }
 
-    /// Information about an export (currently only one export is supported), for handshake
-    #[derive(Debug, Default)]
-    pub struct Export {
-        /// Size of the underlying data, in bytes
-        pub size: u64,
-        /// Tell client it's readonly
-        pub readonly: bool,
-        /// Tell that NBD_CMD_RESIZE should be supported. Not implemented in this library currently
-        pub resizeable: bool,
-        /// Tell that the exposed device has slow seeks, hence clients should use elevator algorithm
-        pub rotational: bool,
-        /// Tell that NBD_CMD_TRIM operation is supported. Not implemented in this library currently
-        pub send_trim: bool,
-    }
+    pub use super::Export;
 
     /// Ignores incoming export name, accepts everything
+    /// Export name is ignored, currently only one export is supported
     pub fn handshake<IO: Write + Read>(mut c: IO, export: &Export) -> Result<()> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
         let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
@@ -72,14 +76,14 @@ pub mod server {
             strerror("Invalid client flag")?;
         }
 
-        let client_optmagic = c.read_u64::<BE>()?;
-
-        if client_optmagic != 0x49484156454F5054 {
-            // IHAVEOPT
-            strerror("Invalid client optmagic")?;
-        }
-
         loop {
+            let client_optmagic = c.read_u64::<BE>()?;
+    
+            if client_optmagic != 0x49484156454F5054 {
+                // IHAVEOPT
+                strerror("Invalid client optmagic")?;
+            }
+
             let clopt = c.read_u32::<BE>()?;
             let optlen = c.read_u32::<BE>()?;
 
@@ -100,7 +104,7 @@ pub mod server {
                         flags |= NBD_FLAG_SEND_FLUSH
                     };
                     if export.resizeable {
-                        flags |= NBD_FLAG_READ_ONLY
+                        flags |= NBD_FLAG_SEND_RESIZE
                     };
                     if export.rotational {
                         flags |= NBD_FLAG_ROTATIONAL
@@ -264,56 +268,162 @@ pub mod server {
     /// There is some untested, doc-hidden old handshake support in this library.
     pub const DEFAULT_TCP_PORT: u16 = 10809;
 
-    #[allow(dead_code)]
-    mod consts {
-        pub const NBD_OPT_EXPORT_NAME: u32 = 1;
-        pub const NBD_OPT_ABORT: u32 = 2;
-        pub const NBD_OPT_LIST: u32 = 3;
-        pub const NBD_OPT_STARTTLS: u32 = 5;
-        pub const NBD_OPT_INFO: u32 = 6;
-        pub const NBD_OPT_GO: u32 = 7;
-
-        pub const NBD_REP_ACK: u32 = 1;
-        pub const NBD_REP_SERVER: u32 = 2;
-        pub const NBD_REP_INFO: u32 = 3;
-        pub const NBD_REP_FLAG_ERROR: u32 = (1 << 31);
-        pub const NBD_REP_ERR_UNSUP: u32 = (1 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_POLICY: u32 = (2 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_INVALID: u32 = (3 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_PLATFORM: u32 = (4 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_TLS_REQD: u32 = (5 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_UNKNOWN: u32 = (6 | NBD_REP_FLAG_ERROR);
-        pub const NBD_REP_ERR_BLOCK_SIZE_REQD: u32 = (8 | NBD_REP_FLAG_ERROR);
-
-        pub const NBD_FLAG_FIXED_NEWSTYLE: u16 = (1 << 0);
-        pub const NBD_FLAG_NO_ZEROES: u16 = (1 << 1);
-
-        pub const NBD_FLAG_C_FIXED_NEWSTYLE: u32 = NBD_FLAG_FIXED_NEWSTYLE as u32;
-        pub const NBD_FLAG_C_NO_ZEROES: u32 = NBD_FLAG_NO_ZEROES as u32;
-
-        pub const NBD_INFO_EXPORT: u16 = 0;
-        pub const NBD_INFO_NAME: u16 = 1;
-        pub const NBD_INFO_DESCRIPTION: u16 = 2;
-        pub const NBD_INFO_BLOCK_SIZE: u16 = 3;
-
-        pub const NBD_FLAG_HAS_FLAGS: u16 = (1 << 0);
-        pub const NBD_FLAG_READ_ONLY: u16 = (1 << 1);
-        pub const NBD_FLAG_SEND_FLUSH: u16 = (1 << 2);
-        pub const NBD_FLAG_SEND_FUA: u16 = (1 << 3);
-        pub const NBD_FLAG_ROTATIONAL: u16 = (1 << 4);
-        pub const NBD_FLAG_SEND_TRIM: u16 = (1 << 5);
-        pub const NBD_FLAG_SEND_WRITE_ZEROES: u16 = (1 << 6);
-        pub const NBD_FLAG_CAN_MULTI_CONN: u16 = (1 << 8);
-
-        pub const NBD_CMD_READ: u16 = 0;
-        pub const NBD_CMD_WRITE: u16 = 1;
-        pub const NBD_CMD_DISC: u16 = 2;
-        pub const NBD_CMD_FLUSH: u16 = 3;
-        pub const NBD_CMD_TRIM: u16 = 4;
-        pub const NBD_CMD_WRITE_ZEROES: u16 = 6;
-    }
+ 
 
 } // mod server
+
+
+
+
+#[allow(missing_docs,unused)]
+pub mod client {
+    use super::consts::*;
+    use super::strerror;
+    use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
+    use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
+    
+    
+    pub use super::Export;
+    
+    fn fill_in_flags(export: &mut Export, flags: u16) {
+        if flags & NBD_FLAG_HAS_FLAGS != 0 {
+            if flags & NBD_FLAG_READ_ONLY  != 0 { export.readonly = true; }
+            if flags & NBD_FLAG_SEND_RESIZE  != 0 { export.resizeable = true; }
+            if flags & NBD_FLAG_ROTATIONAL  != 0 { export.rotational = true; }
+            if flags & NBD_FLAG_SEND_TRIM  != 0 { export.send_trim = true; }
+        }
+    }
+    
+    /// Negotiate with a server, use before creating the actual client
+    pub fn handshake<IO: Write + Read>(mut c: IO, name: &[u8]) -> Result<Export> {
+        let mut signature = [0; 8];
+        c.read_exact(&mut signature)?;
+        
+        if signature != *b"NBDMAGIC" {
+            strerror("Invalid magic1")?;
+        }
+        
+        c.read_exact(&mut signature)?;
+        
+        let (size,flags) =
+        if signature == *b"IHAVEOPT" {
+            // newstyle
+            let hs_flags = c.read_u16::<BE>()?;
+            
+            c.write_u32::<BE>(NBD_FLAG_C_FIXED_NEWSTYLE)?;
+
+            // optmagic
+            c.write_u64::<BE>(0x49484156454F5054)?;
+            c.write_u32::<BE>(NBD_OPT_EXPORT_NAME);
+            c.write_u32::<BE>(name.len() as u32)?;
+            c.write_all(name)?;
+            
+            let size = c.read_u64::<BE>()?;
+            let flags = c.read_u16::<BE>()?;
+            let mut z = [0;124];
+            c.read_exact(&mut z)?;
+            if z[..] != [0;124][..] {
+                strerror("Expected 124 bytes of zeroes are not zeroes")?;
+            }
+            (size,flags)
+        } else if signature == *b"\x00\x00\x42\x02\x81\x86\x12\x53" {
+            // oldstyle.
+            // Note: not tested at all
+            if name != b"" {
+                strerror("Old style server does not support named exports")?;
+            };
+            let size  = c.read_u64::<BE>()?;
+            let flags = c.read_u32::<BE>()?;
+            let mut z = [0;124];
+            c.read_exact(&mut z)?;
+            if z[..] != [0;124][..] {
+                strerror("Expected 124 bytes of zeroes are not zeroes")?;
+            }
+            
+            // Is it those flags or some other flags?
+            // Too lazy to actually look into NBD implementation.
+            let flags = flags as u16;
+        
+            (size, flags)
+        } else {
+            strerror("Invalid magic2")?;
+            unreachable!()
+        };
+    
+        let mut e = Export::default();
+        e.size = size;
+    
+ 
+        fill_in_flags(&mut e, flags);
+        if flags & NBD_FLAG_HAS_FLAGS != 0 && flags & NBD_FLAG_SEND_FLUSH == 0 {
+            strerror("Really no NBD_FLAG_SEND_FLUSH?")?;
+        }
+    
+        Ok(e)
+    }
+    
+    
+    /// Additional operations (apart from reading and writing) supported by NBD extensions
+    /// Not really supported in this version of the library
+    pub trait NbdExt {
+        /// Discard this data
+        fn trim(&mut self, offset: u64, length: u64) -> Result<()>;
+        fn resize(&mut self, newsize: u64) -> Result<()>;
+    }
+}
+
+
+#[allow(dead_code)]
+mod consts {
+    pub const NBD_OPT_EXPORT_NAME: u32 = 1;
+    pub const NBD_OPT_ABORT: u32 = 2;
+    pub const NBD_OPT_LIST: u32 = 3;
+    pub const NBD_OPT_STARTTLS: u32 = 5;
+    pub const NBD_OPT_INFO: u32 = 6;
+    pub const NBD_OPT_GO: u32 = 7;
+
+    pub const NBD_REP_ACK: u32 = 1;
+    pub const NBD_REP_SERVER: u32 = 2;
+    pub const NBD_REP_INFO: u32 = 3;
+    pub const NBD_REP_FLAG_ERROR: u32 = (1 << 31);
+    pub const NBD_REP_ERR_UNSUP: u32 = (1 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_POLICY: u32 = (2 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_INVALID: u32 = (3 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_PLATFORM: u32 = (4 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_TLS_REQD: u32 = (5 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_UNKNOWN: u32 = (6 | NBD_REP_FLAG_ERROR);
+    pub const NBD_REP_ERR_BLOCK_SIZE_REQD: u32 = (8 | NBD_REP_FLAG_ERROR);
+
+    pub const NBD_FLAG_FIXED_NEWSTYLE: u16 = (1 << 0);
+    pub const NBD_FLAG_NO_ZEROES: u16 = (1 << 1);
+
+    pub const NBD_FLAG_C_FIXED_NEWSTYLE: u32 = NBD_FLAG_FIXED_NEWSTYLE as u32;
+    pub const NBD_FLAG_C_NO_ZEROES: u32 = NBD_FLAG_NO_ZEROES as u32;
+
+    pub const NBD_INFO_EXPORT: u16 = 0;
+    pub const NBD_INFO_NAME: u16 = 1;
+    pub const NBD_INFO_DESCRIPTION: u16 = 2;
+    pub const NBD_INFO_BLOCK_SIZE: u16 = 3;
+
+    pub const NBD_FLAG_HAS_FLAGS: u16 = (1 << 0);
+    pub const NBD_FLAG_READ_ONLY: u16 = (1 << 1);
+    pub const NBD_FLAG_SEND_FLUSH: u16 = (1 << 2);
+    pub const NBD_FLAG_SEND_FUA: u16 = (1 << 3);
+    pub const NBD_FLAG_ROTATIONAL: u16 = (1 << 4);
+    pub const NBD_FLAG_SEND_TRIM: u16 = (1 << 5);
+    pub const NBD_FLAG_SEND_WRITE_ZEROES: u16 = (1 << 6);
+    pub const NBD_FLAG_CAN_MULTI_CONN: u16 = (1 << 8);
+    pub const NBD_FLAG_SEND_RESIZE: u16 = (1 << 9);
+
+    pub const NBD_CMD_READ: u16 = 0;
+    pub const NBD_CMD_WRITE: u16 = 1;
+    pub const NBD_CMD_DISC: u16 = 2;
+    pub const NBD_CMD_FLUSH: u16 = 3;
+    pub const NBD_CMD_TRIM: u16 = 4;
+    pub const NBD_CMD_WRITE_ZEROES: u16 = 6;
+}
+
+
 
 /*
 // Options that the client can select to the server 
@@ -362,11 +472,3 @@ pub mod server {
 
 
 */
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
