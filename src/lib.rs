@@ -24,17 +24,48 @@ pub struct Export {
 }
 
 fn strerror(s: &'static str) -> std::io::Result<()> {
-    let stderr: Box<::std::error::Error + Send + Sync> = s.into();
-    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, stderr))
+    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, s))
+}
+
+// based on https://doc.rust-lang.org/src/std/io/util.rs.html#48
+fn mycopy<R: ?Sized, W: ?Sized>(
+    reader: &mut R,
+    writer: &mut W,
+    buf: &mut [u8],
+    mut limit: usize,
+) -> ::std::io::Result<u64>
+where
+    R: ::std::io::Read,
+    W: ::std::io::Write,
+{
+    let mut written = 0;
+    loop {
+        let to_read = buf.len().min(limit);
+        let len = match reader.read(&mut buf[0..to_read]) {
+            Ok(0) => return Ok(written),
+            Ok(len) => len,
+            Err(ref e) if e.kind() == ::std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        writer.write_all(&buf[..len])?;
+        written += len as u64;
+        //eprintln!("written={} limit={} len={}", written, limit, len);
+        limit -= len;
+        if limit == 0 {
+            return Ok(written);
+        }
+    }
 }
 
 /// Items for implementing NBD server
+///
+/// "Serialize" your Read+Write+Seek into a Read+Write socket using standard protocol.
 pub mod server {
 
     use super::consts::*;
-    use super::strerror;
+    use super::{strerror, mycopy};
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
-    use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
+    use std::io::{Error, Read, Result, Seek, SeekFrom, Write};
 
     #[doc(hidden)]
     pub fn oldstyle_header<W: Write>(mut c: W, size: u64, flags: u32) -> Result<()> {
@@ -165,36 +196,6 @@ pub mod server {
         replyt(&mut c, ec, handle)
     }
 
-    // based on https://doc.rust-lang.org/src/std/io/util.rs.html#48
-    fn mycopy<R: ?Sized, W: ?Sized>(
-        reader: &mut R,
-        writer: &mut W,
-        buf: &mut [u8],
-        mut limit: usize,
-    ) -> Result<u64>
-    where
-        R: Read,
-        W: Write,
-    {
-        let mut written = 0;
-        loop {
-            let to_read = buf.len().min(limit);
-            let len = match reader.read(&mut buf[0..to_read]) {
-                Ok(0) => return Ok(written),
-                Ok(len) => len,
-                Err(ref e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
-            };
-            writer.write_all(&buf[..len])?;
-            written += len as u64;
-            //eprintln!("written={} limit={} len={}", written, limit, len);
-            limit -= len;
-            if limit == 0 {
-                return Ok(written);
-            }
-        }
-    }
-
     /// Serve given data. If readonly, use a dummy `Write` implementation.
     ///
     /// Should be used after `handshake`
@@ -273,12 +274,12 @@ pub mod server {
 } // mod server
 
 
-
-
-#[allow(missing_docs,unused)]
+/// Items for implementing NBD client.
+///
+/// Turn Read+Write into a Read+Write+Seek using a standard protocol.
 pub mod client {
     use super::consts::*;
-    use super::strerror;
+    use super::{strerror,CheckedAddI64,ClampToU32};
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
     use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
     
@@ -308,15 +309,16 @@ pub mod client {
         let (size,flags) =
         if signature == *b"IHAVEOPT" {
             // newstyle
-            let hs_flags = c.read_u16::<BE>()?;
+            let _hs_flags = c.read_u16::<BE>()?;
             
             c.write_u32::<BE>(NBD_FLAG_C_FIXED_NEWSTYLE)?;
 
             // optmagic
             c.write_u64::<BE>(0x49484156454F5054)?;
-            c.write_u32::<BE>(NBD_OPT_EXPORT_NAME);
+            c.write_u32::<BE>(NBD_OPT_EXPORT_NAME)?;
             c.write_u32::<BE>(name.len() as u32)?;
             c.write_all(name)?;
+            c.flush()?;
             
             let size = c.read_u64::<BE>()?;
             let flags = c.read_u16::<BE>()?;
@@ -362,13 +364,168 @@ pub mod client {
         Ok(e)
     }
     
+    /// Represents NBD client. Use `Read`,`Write` and `Seek` trait methods,
+    /// but make sure those are block-aligned
+    pub struct NbdClient<IO: Write + Read> {
+        c: IO,
+        seek_pos: u64,
+        size: u64,
+    }
+    
+    impl<IO: Write + Read> NbdClient<IO> {
+        /// Create new NbdClient from `Export` returned from `handshake`.
+        /// Obviously, the `c` connection should be the same as in `handshake`.
+        pub fn new(c: IO, export: &Export) -> Self {
+            NbdClient {
+                c,
+                seek_pos: 0,
+                size: export.size,
+            }
+        }
+    }
+    
+    impl<IO: Write + Read> Seek for NbdClient<IO> {
+        fn seek(&mut self, sf:SeekFrom) -> Result<u64> {
+            match sf {
+                SeekFrom::Start(x) => {
+                    self.seek_pos = x;
+                },
+                SeekFrom::Current(x) => {
+                    if let Some(xx) = self.seek_pos.checked_add_i64(x) {
+                        self.seek_pos = xx;
+                    } else {
+                        strerror("Invalid seek")?;
+                    }
+                },
+                SeekFrom::End(x) => {
+                    if let Some(xx) = self.size.checked_add_i64(x) {
+                        self.seek_pos = xx;
+                    } else {
+                        strerror("Invalid seek")?;
+                    }
+                },
+            }
+            Ok(self.seek_pos)
+        }
+    }
+    
+    fn check_err(error: u32) -> Result<()> {
+        match error {
+            1 => Err(Error::new(ErrorKind::PermissionDenied, "from device")),
+            5 => Err(Error::new(ErrorKind::Other, "EIO")),
+            12 => Err(Error::new(ErrorKind::Other, "ENOMEM")),
+            22 => Err(Error::new(ErrorKind::Other, "EINVAL")),
+            28 => Err(Error::new(ErrorKind::Other, "ENOSPC")),
+            0 => Ok(()),
+            _ => Err(Error::new(ErrorKind::Other, "other error from device")),
+        }
+    }
+    
+    fn getreply<IO: Write + Read>  (mut c:IO) -> Result<()> {
+        let signature = c.read_u32::<BE>()?;
+        let error = c.read_u32::<BE>()?;
+        let handle = c.read_u64::<BE>()?;
+        
+        if signature != 0x67446698 {
+            strerror("Invalid signature for incoming reply")?;
+        }
+        if handle != 0 {
+            strerror("Unexpected handle")?;
+        };
+        check_err(error)?;
+        Ok(())
+    }
+    
+    fn sendrequest<IO: Write + Read>  (mut c:IO, cmd:u16, offset:u64, len:u32) -> Result<()> {
+        c.write_u32::<BE>(0x25609513)?;
+        c.write_u16::<BE>(0)?;  // flags
+        c.write_u16::<BE>(cmd)?;
+        c.write_u64::<BE>(0)?; // handle
+        c.write_u64::<BE>(offset)?;
+        c.write_u32::<BE>(len)?;
+        c.flush()?;
+        Ok(())
+    }
+    
+    impl<IO:Write + Read> NbdClient<IO> {
+        fn get_effective_len(&self, buflen: usize) -> Result<u32> {
+            if self.seek_pos == self.size {
+                return Ok(0);
+            }
+            if self.seek_pos > self.size {
+                strerror("Trying to read or write past the end of the device")?;
+            }
+            
+            let maxlen = (self.size - self.seek_pos).clamp_to_u32();
+            let len = buflen.clamp_to_u32().min(maxlen);
+            Ok(len)
+        }
+    }
+    
+    impl<IO: Write + Read> Read for NbdClient<IO> {
+        fn read(&mut self, buf:&mut [u8]) -> Result<usize> {
+            let len = self.get_effective_len(buf.len())?;
+            if len == 0 { return Ok(0); }
+            
+            sendrequest(&mut self.c, NBD_CMD_READ, self.seek_pos, len)?;
+            
+            getreply(&mut self.c)?;
+            
+            self.c.read_exact(&mut buf[0..(len as usize)])?;
+            Ok(len as usize)
+        }
+    }
+    
+    impl<IO: Write + Read> Write for NbdClient<IO> {
+        fn write(&mut self, buf:&[u8]) -> Result<usize> {
+            let len = self.get_effective_len(buf.len())?;
+            if len == 0 { return Ok(0); }
+            
+            sendrequest(&mut self.c, NBD_CMD_WRITE, self.seek_pos, len)?;
+            
+            self.c.write_all(&buf[0..(len as usize)])?;
+            self.c.flush()?;
+            
+            getreply(&mut self.c)?;
+            
+            Ok(len as usize)
+        }
+        fn flush(&mut self) -> Result<()> {
+            sendrequest(&mut self.c, NBD_CMD_FLUSH, 0, 0)?;
+            getreply(&mut self.c)?;
+            Ok(())
+        }
+    }
     
     /// Additional operations (apart from reading and writing) supported by NBD extensions
-    /// Not really supported in this version of the library
+    /// Not tested yet.
     pub trait NbdExt {
-        /// Discard this data
-        fn trim(&mut self, offset: u64, length: u64) -> Result<()>;
+        /// Discard this data, starting from current seek offset up to specified length
+        fn trim(&mut self, length: usize) -> Result<()>;
+        
+        /// Change size of the device
         fn resize(&mut self, newsize: u64) -> Result<()>;
+    }
+    
+    impl<IO: Write + Read> NbdExt for NbdClient<IO> {
+        fn trim(&mut self, length: usize) -> Result<()> {
+            let len = self.get_effective_len(length)?;
+            if len == 0 { return Ok(()); }
+            
+            sendrequest(&mut self.c, NBD_CMD_TRIM, self.seek_pos, len)?;
+            
+            getreply(&mut self.c)?;
+            
+            Ok(())
+        }
+        
+        fn resize(&mut self, newsize: u64) -> Result<()> {
+            sendrequest(&mut self.c, NBD_CMD_RESIZE, newsize, 0)?;
+            
+            getreply(&mut self.c)?;
+            self.size = newsize;
+            Ok(())
+        }
     }
 }
 
@@ -421,8 +578,46 @@ mod consts {
     pub const NBD_CMD_FLUSH: u16 = 3;
     pub const NBD_CMD_TRIM: u16 = 4;
     pub const NBD_CMD_WRITE_ZEROES: u16 = 6;
+    pub const NBD_CMD_RESIZE: u16 = 8;
 }
 
+trait CheckedAddI64 where Self : Sized{
+    fn checked_add_i64(self, rhs:i64) -> Option<Self>;
+}
+impl CheckedAddI64 for u64 {
+    fn checked_add_i64(self, rhs:i64) -> Option<Self> {
+        if rhs >= 0 {
+            self.checked_add(rhs as u64)
+        } else {
+            if let Some(x) = rhs.checked_neg() {
+                self.checked_sub(x as u64)
+            } else {
+                None
+            }
+        }
+    }
+}
+trait ClampToU32 where Self : Sized {
+    fn clamp_to_u32(self) -> u32;
+}
+impl ClampToU32 for usize {
+    fn clamp_to_u32(self) -> u32 {
+        if self > u32::max_value() as usize {
+            u32::max_value()
+        } else {
+           self as u32
+        }
+    }
+}
+impl ClampToU32 for u64 {
+    fn clamp_to_u32(self) -> u32 {
+        if self > u32::max_value() as u64 {
+            u32::max_value()
+        } else {
+           self as u32
+        }
+    }
+}
 
 
 /*
