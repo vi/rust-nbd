@@ -21,6 +21,8 @@ pub struct Export {
     pub rotational: bool,
     /// Tell that NBD_CMD_TRIM operation is supported. Not implemented in this library currently
     pub send_trim: bool,
+    /// Tell that NBD_CMD_FLUSH may be sent
+    pub send_flush: bool,
 }
 
 fn strerror(s: &'static str) -> std::io::Result<()> {
@@ -292,6 +294,7 @@ pub mod client {
             if flags & NBD_FLAG_SEND_RESIZE  != 0 { export.resizeable = true; }
             if flags & NBD_FLAG_ROTATIONAL  != 0 { export.rotational = true; }
             if flags & NBD_FLAG_SEND_TRIM  != 0 { export.send_trim = true; }
+            if flags & NBD_FLAG_SEND_FLUSH  != 0 { export.send_flush = true; }
         }
     }
     
@@ -357,9 +360,6 @@ pub mod client {
     
  
         fill_in_flags(&mut e, flags);
-        if flags & NBD_FLAG_HAS_FLAGS != 0 && flags & NBD_FLAG_SEND_FLUSH == 0 {
-            strerror("Really no NBD_FLAG_SEND_FLUSH?")?;
-        }
     
         Ok(e)
     }
