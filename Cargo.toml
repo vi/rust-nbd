@@ -16,3 +16,5 @@ byteorder = "1.0"
 [dev-dependencies]
 proptest = "0.8.4"
 rand = "0.5.5"
+readwrite = "0.1.0"
+pipe = "0.0.3"

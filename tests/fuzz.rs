@@ -3,6 +3,9 @@
 #[macro_use]
 extern crate proptest;
 extern crate rand;
+extern crate readwrite;
+extern crate pipe;
+extern crate nbd;
 
 use rand::prng::XorShiftRng;
 use rand::{SeedableRng,RngCore};
@@ -10,6 +13,8 @@ use rand::{SeedableRng,RngCore};
 use proptest::prelude::{Strategy,any,prop};
 
 use std::io::{Seek,SeekFrom,Read,Write,Cursor};
+
+use readwrite::ReadWrite;
 
 #[derive(Debug,Eq,PartialEq)]
 enum Action {
@@ -54,6 +59,16 @@ proptest! {
         let mut c1 = Cursor::new(backing_storage1);
         let mut c2 = Cursor::new(backing_storage2);
         
+        let (r1,w1) = pipe::pipe();
+        let (r2,w2) = pipe::pipe();
+        let (s1,s2) = (ReadWrite::new(r1,w2), ReadWrite::new(r2,w1));
+        
+        let h = std::thread::spawn(move || {
+            nbd::server::transmission(s2, &mut c2);
+            c2
+        });
+        
+        let mut c2 = nbd::client::NbdClient::new(s1, &nbd::Export{size:1024*1024,..Default::default()});
     
         for i in script {
             match i {
@@ -77,6 +92,7 @@ proptest! {
                 },
             }
         }
-        assert!(c1.into_inner() == c2.into_inner());
+        drop(c2);
+        assert!(c1.into_inner() == h.join().unwrap().into_inner());
     }
 }
