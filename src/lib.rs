@@ -65,7 +65,7 @@ where
 pub mod server {
 
     use super::consts::*;
-    use super::{strerror, mycopy};
+    use super::{mycopy, strerror};
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
     use std::io::{Error, Read, Result, Seek, SeekFrom, Write};
 
@@ -111,7 +111,7 @@ pub mod server {
 
         loop {
             let client_optmagic = c.read_u64::<BE>()?;
-    
+
             if client_optmagic != 0x49484156454F5054 {
                 // IHAVEOPT
                 strerror("Invalid client optmagic")?;
@@ -272,49 +272,54 @@ pub mod server {
     /// There is some untested, doc-hidden old handshake support in this library.
     pub const DEFAULT_TCP_PORT: u16 = 10809;
 
- 
-
 } // mod server
-
 
 /// Items for implementing NBD client.
 ///
 /// Turn Read+Write into a Read+Write+Seek using a standard protocol.
 pub mod client {
     use super::consts::*;
-    use super::{strerror,CheckedAddI64,ClampToU32};
+    use super::{strerror, CheckedAddI64, ClampToU32};
     use byteorder::{BigEndian as BE, ReadBytesExt, WriteBytesExt};
     use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
-    
-    
+
     pub use super::Export;
-    
+
     fn fill_in_flags(export: &mut Export, flags: u16) {
         if flags & NBD_FLAG_HAS_FLAGS != 0 {
-            if flags & NBD_FLAG_READ_ONLY  != 0 { export.readonly = true; }
-            if flags & NBD_FLAG_SEND_RESIZE  != 0 { export.resizeable = true; }
-            if flags & NBD_FLAG_ROTATIONAL  != 0 { export.rotational = true; }
-            if flags & NBD_FLAG_SEND_TRIM  != 0 { export.send_trim = true; }
-            if flags & NBD_FLAG_SEND_FLUSH  != 0 { export.send_flush = true; }
+            if flags & NBD_FLAG_READ_ONLY != 0 {
+                export.readonly = true;
+            }
+            if flags & NBD_FLAG_SEND_RESIZE != 0 {
+                export.resizeable = true;
+            }
+            if flags & NBD_FLAG_ROTATIONAL != 0 {
+                export.rotational = true;
+            }
+            if flags & NBD_FLAG_SEND_TRIM != 0 {
+                export.send_trim = true;
+            }
+            if flags & NBD_FLAG_SEND_FLUSH != 0 {
+                export.send_flush = true;
+            }
         }
     }
-    
+
     /// Negotiate with a server, use before creating the actual client
     pub fn handshake<IO: Write + Read>(mut c: IO, name: &[u8]) -> Result<Export> {
         let mut signature = [0; 8];
         c.read_exact(&mut signature)?;
-        
+
         if signature != *b"NBDMAGIC" {
             strerror("Invalid magic1")?;
         }
-        
+
         c.read_exact(&mut signature)?;
-        
-        let (size,flags) =
-        if signature == *b"IHAVEOPT" {
+
+        let (size, flags) = if signature == *b"IHAVEOPT" {
             // newstyle
             let _hs_flags = c.read_u16::<BE>()?;
-            
+
             c.write_u32::<BE>(NBD_FLAG_C_FIXED_NEWSTYLE)?;
 
             // optmagic
@@ -323,48 +328,47 @@ pub mod client {
             c.write_u32::<BE>(name.len() as u32)?;
             c.write_all(name)?;
             c.flush()?;
-            
+
             let size = c.read_u64::<BE>()?;
             let flags = c.read_u16::<BE>()?;
-            let mut z = [0;124];
+            let mut z = [0; 124];
             c.read_exact(&mut z)?;
-            if z[..] != [0;124][..] {
+            if z[..] != [0; 124][..] {
                 strerror("Expected 124 bytes of zeroes are not zeroes")?;
             }
-            (size,flags)
+            (size, flags)
         } else if signature == *b"\x00\x00\x42\x02\x81\x86\x12\x53" {
             // oldstyle.
             // Note: not tested at all
             if name != b"" {
                 strerror("Old style server does not support named exports")?;
             };
-            let size  = c.read_u64::<BE>()?;
+            let size = c.read_u64::<BE>()?;
             let flags = c.read_u32::<BE>()?;
-            let mut z = [0;124];
+            let mut z = [0; 124];
             c.read_exact(&mut z)?;
-            if z[..] != [0;124][..] {
+            if z[..] != [0; 124][..] {
                 strerror("Expected 124 bytes of zeroes are not zeroes")?;
             }
-            
+
             // Is it those flags or some other flags?
             // Too lazy to actually look into NBD implementation.
             let flags = flags as u16;
-        
+
             (size, flags)
         } else {
             strerror("Invalid magic2")?;
             unreachable!()
         };
-    
+
         let mut e = Export::default();
         e.size = size;
-    
- 
+
         fill_in_flags(&mut e, flags);
-    
+
         Ok(e)
     }
-    
+
     /// Represents NBD client. Use `Read`,`Write` and `Seek` trait methods,
     /// but make sure those are block-aligned
     pub struct NbdClient<IO: Write + Read> {
@@ -372,7 +376,7 @@ pub mod client {
         seek_pos: u64,
         size: u64,
     }
-    
+
     impl<IO: Write + Read> NbdClient<IO> {
         /// Create new NbdClient from `Export` returned from `handshake`.
         /// Obviously, the `c` connection should be the same as in `handshake`.
@@ -384,32 +388,32 @@ pub mod client {
             }
         }
     }
-    
+
     impl<IO: Write + Read> Seek for NbdClient<IO> {
-        fn seek(&mut self, sf:SeekFrom) -> Result<u64> {
+        fn seek(&mut self, sf: SeekFrom) -> Result<u64> {
             match sf {
                 SeekFrom::Start(x) => {
                     self.seek_pos = x;
-                },
+                }
                 SeekFrom::Current(x) => {
                     if let Some(xx) = self.seek_pos.checked_add_i64(x) {
                         self.seek_pos = xx;
                     } else {
                         strerror("Invalid seek")?;
                     }
-                },
+                }
                 SeekFrom::End(x) => {
                     if let Some(xx) = self.size.checked_add_i64(x) {
                         self.seek_pos = xx;
                     } else {
                         strerror("Invalid seek")?;
                     }
-                },
+                }
             }
             Ok(self.seek_pos)
         }
     }
-    
+
     fn check_err(error: u32) -> Result<()> {
         match error {
             1 => Err(Error::new(ErrorKind::PermissionDenied, "from device")),
@@ -421,12 +425,12 @@ pub mod client {
             _ => Err(Error::new(ErrorKind::Other, "other error from device")),
         }
     }
-    
-    fn getreply<IO: Write + Read>  (mut c:IO) -> Result<()> {
+
+    fn getreply<IO: Write + Read>(mut c: IO) -> Result<()> {
         let signature = c.read_u32::<BE>()?;
         let error = c.read_u32::<BE>()?;
         let handle = c.read_u64::<BE>()?;
-        
+
         if signature != 0x67446698 {
             strerror("Invalid signature for incoming reply")?;
         }
@@ -436,10 +440,10 @@ pub mod client {
         check_err(error)?;
         Ok(())
     }
-    
-    fn sendrequest<IO: Write + Read>  (mut c:IO, cmd:u16, offset:u64, len:u32) -> Result<()> {
+
+    fn sendrequest<IO: Write + Read>(mut c: IO, cmd: u16, offset: u64, len: u32) -> Result<()> {
         c.write_u32::<BE>(0x25609513)?;
-        c.write_u16::<BE>(0)?;  // flags
+        c.write_u16::<BE>(0)?; // flags
         c.write_u16::<BE>(cmd)?;
         c.write_u64::<BE>(0)?; // handle
         c.write_u64::<BE>(offset)?;
@@ -447,8 +451,8 @@ pub mod client {
         c.flush()?;
         Ok(())
     }
-    
-    impl<IO:Write + Read> NbdClient<IO> {
+
+    impl<IO: Write + Read> NbdClient<IO> {
         fn get_effective_len(&self, buflen: usize) -> Result<u32> {
             if self.seek_pos == self.size {
                 return Ok(0);
@@ -456,38 +460,42 @@ pub mod client {
             if self.seek_pos > self.size {
                 strerror("Trying to read or write past the end of the device")?;
             }
-            
+
             let maxlen = (self.size - self.seek_pos).clamp_to_u32();
             let len = buflen.clamp_to_u32().min(maxlen);
             Ok(len)
         }
     }
-    
+
     impl<IO: Write + Read> Read for NbdClient<IO> {
-        fn read(&mut self, buf:&mut [u8]) -> Result<usize> {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             let len = self.get_effective_len(buf.len())?;
-            if len == 0 { return Ok(0); }
-            
+            if len == 0 {
+                return Ok(0);
+            }
+
             sendrequest(&mut self.c, NBD_CMD_READ, self.seek_pos, len)?;
-            
+
             getreply(&mut self.c)?;
-            
+
             self.c.read_exact(&mut buf[0..(len as usize)])?;
             self.seek_pos += len as u64;
             Ok(len as usize)
         }
     }
-    
+
     impl<IO: Write + Read> Write for NbdClient<IO> {
-        fn write(&mut self, buf:&[u8]) -> Result<usize> {
+        fn write(&mut self, buf: &[u8]) -> Result<usize> {
             let len = self.get_effective_len(buf.len())?;
-            if len == 0 { return Ok(0); }
-            
+            if len == 0 {
+                return Ok(0);
+            }
+
             sendrequest(&mut self.c, NBD_CMD_WRITE, self.seek_pos, len)?;
-            
+
             self.c.write_all(&buf[0..(len as usize)])?;
             self.c.flush()?;
-            
+
             getreply(&mut self.c)?;
             self.seek_pos += len as u64;
             Ok(len as usize)
@@ -498,39 +506,40 @@ pub mod client {
             Ok(())
         }
     }
-    
+
     /// Additional operations (apart from reading and writing) supported by NBD extensions
     /// Not tested yet.
     pub trait NbdExt {
         /// Discard this data, starting from current seek offset up to specified length
         fn trim(&mut self, length: usize) -> Result<()>;
-        
+
         /// Change size of the device
         fn resize(&mut self, newsize: u64) -> Result<()>;
     }
-    
+
     impl<IO: Write + Read> NbdExt for NbdClient<IO> {
         fn trim(&mut self, length: usize) -> Result<()> {
             let len = self.get_effective_len(length)?;
-            if len == 0 { return Ok(()); }
-            
+            if len == 0 {
+                return Ok(());
+            }
+
             sendrequest(&mut self.c, NBD_CMD_TRIM, self.seek_pos, len)?;
-            
+
             getreply(&mut self.c)?;
-            
+
             Ok(())
         }
-        
+
         fn resize(&mut self, newsize: u64) -> Result<()> {
             sendrequest(&mut self.c, NBD_CMD_RESIZE, newsize, 0)?;
-            
+
             getreply(&mut self.c)?;
             self.size = newsize;
             Ok(())
         }
     }
 }
-
 
 #[allow(dead_code)]
 mod consts {
@@ -583,11 +592,14 @@ mod consts {
     pub const NBD_CMD_RESIZE: u16 = 8;
 }
 
-trait CheckedAddI64 where Self : Sized{
-    fn checked_add_i64(self, rhs:i64) -> Option<Self>;
+trait CheckedAddI64
+where
+    Self: Sized,
+{
+    fn checked_add_i64(self, rhs: i64) -> Option<Self>;
 }
 impl CheckedAddI64 for u64 {
-    fn checked_add_i64(self, rhs:i64) -> Option<Self> {
+    fn checked_add_i64(self, rhs: i64) -> Option<Self> {
         if rhs >= 0 {
             self.checked_add(rhs as u64)
         } else {
@@ -599,7 +611,10 @@ impl CheckedAddI64 for u64 {
         }
     }
 }
-trait ClampToU32 where Self : Sized {
+trait ClampToU32
+where
+    Self: Sized,
+{
     fn clamp_to_u32(self) -> u32;
 }
 impl ClampToU32 for usize {
@@ -607,7 +622,7 @@ impl ClampToU32 for usize {
         if self > u32::max_value() as usize {
             u32::max_value()
         } else {
-           self as u32
+            self as u32
         }
     }
 }
@@ -616,11 +631,10 @@ impl ClampToU32 for u64 {
         if self > u32::max_value() as u64 {
             u32::max_value()
         } else {
-           self as u32
+            self as u32
         }
     }
 }
-
 
 /*
 // Options that the client can select to the server 
