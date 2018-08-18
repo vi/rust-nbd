@@ -473,6 +473,7 @@ pub mod client {
             getreply(&mut self.c)?;
             
             self.c.read_exact(&mut buf[0..(len as usize)])?;
+            self.seek_pos += len as u64;
             Ok(len as usize)
         }
     }
@@ -488,7 +489,7 @@ pub mod client {
             self.c.flush()?;
             
             getreply(&mut self.c)?;
-            
+            self.seek_pos += len as u64;
             Ok(len as usize)
         }
         fn flush(&mut self) -> Result<()> {
