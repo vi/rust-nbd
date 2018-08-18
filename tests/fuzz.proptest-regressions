@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+xs 2234133890 3837533780 1620121459 871615261 # shrinks to script = [Write(1), Write(0), Write(1)]
+xs 2773825267 2244705831 675565958 498742336 # shrinks to script = [Seek(982923), Write(19341), Write(46313)]

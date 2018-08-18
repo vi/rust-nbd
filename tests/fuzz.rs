@@ -54,8 +54,8 @@ proptest! {
         let mut buf = vec![0;65536];
         let mut buf2 = vec![0;65536];
 
-        let backing_storage1 = vec![0u8;SS];
-        let backing_storage2 = vec![0u8;SS];
+        let backing_storage1 = vec![0u8;SS as usize];
+        let backing_storage2 = vec![0u8;SS as usize];
 
         let mut c1 = Cursor::new(backing_storage1);
         let mut c2 = Cursor::new(backing_storage2);
@@ -77,14 +77,16 @@ proptest! {
                     c1.seek(SeekFrom::Start(pos));
                     c2.seek(SeekFrom::Start(pos));
                 },
-                Action::Write(sz) => {
+                Action::Write(mut sz) => {
+                    if sz > (SS - c1.position()) as usize {
+                        sz = (SS - c1.position()) as usize;
+                    }
                     let bufview = &mut buf[0..sz];
                     r.fill_bytes(bufview);
                     c1.write_all(bufview).unwrap();
                     c2.write_all(bufview).unwrap();
                 },
-                Action::ReadAndCheck(mut sz) => {
-
+                Action::ReadAndCheck(sz) => {
                     let bufview  = &mut buf[0..sz];
                     let bufview2 = &mut buf2[0..sz];
                     let ret1 = c1.read(bufview).unwrap();
