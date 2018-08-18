@@ -93,6 +93,13 @@ proptest! {
             }
         }
         drop(c2);
-        assert!(c1.into_inner() == h.join().unwrap().into_inner());
+        
+        let backing_storage1 = c1.into_inner();
+        let backing_storage2 = h.join().unwrap().into_inner();
+        
+        //eprintln!("{:?}", &backing_storage1[0..16]);
+        //eprintln!("{:?}", &backing_storage2[0..16]);
+        
+        assert!(backing_storage1 == backing_storage2);
     }
 }
