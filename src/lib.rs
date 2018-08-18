@@ -238,10 +238,11 @@ pub mod server {
                     if let Err(e) = data.seek(SeekFrom::Start(offset)) {
                         replyte(&mut c, e, handle)?;
                     } else {
-                        replyt(&mut c, 0, handle)?;
                         match mycopy(&mut c, &mut data, &mut buf, length as usize) {
                             Err(e) => replyte(&mut c, e, handle)?,
-                            Ok(x) if x == (length as u64) => {}
+                            Ok(x) if x == (length as u64) => {
+                                replyt(&mut c, 0, handle)?;
+                            }
                             Ok(_) => {
                                 strerror("sudden EOF")?;
                             }
