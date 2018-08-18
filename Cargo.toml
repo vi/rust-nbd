@@ -1,10 +1,10 @@
 [package]
 name = "nbd"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Vitaly \"_Vi\" Shukela <vi0oss@gmail.com>"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/vi/rust-nbd"
-description = "Rust library for NBD (network block device) servers. Maybe clients, someday later..."
+description = "Rust library for NBD (network block device) servers and clients."
 keywords = ["nbd", "network-block-device"]
 categories = ["network-programming"]
 readme = "README.md"
