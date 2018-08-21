@@ -8,7 +8,7 @@ extern crate readwrite;
 use rand::prng::XorShiftRng;
 use rand::{RngCore, SeedableRng};
 
-use proptest::prelude::{prop, Strategy};
+use proptest::prelude::{prop, Strategy, ProptestConfig};
 
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
@@ -42,6 +42,11 @@ fn gen_action() -> impl Strategy<Value = Action> {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 10_000,
+        .. ProptestConfig::default()
+    })]
+    
     #[test]
     fn fuzz_roundtrip(script in prop::collection::vec(gen_action(),3..12)) {
         let seed = [4u8;16];
