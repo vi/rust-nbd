@@ -1,5 +1,3 @@
-#![allow(unused, dead_code)]
-
 #[macro_use]
 extern crate proptest;
 extern crate nbd;
@@ -10,7 +8,7 @@ extern crate readwrite;
 use rand::prng::XorShiftRng;
 use rand::{RngCore, SeedableRng};
 
-use proptest::prelude::{any, prop, Strategy};
+use proptest::prelude::{prop, Strategy};
 
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
@@ -24,8 +22,6 @@ enum Action {
 }
 
 const SS: u64 = 1024 * 1024;
-
-struct Scenario(Vec<Action>);
 
 prop_compose! {
     fn biased_size()(x in 0..65536usize, y in 0..3u8) -> usize {
@@ -47,8 +43,8 @@ fn gen_action() -> impl Strategy<Value = Action> {
 
 proptest! {
     #[test]
-    fn fuzz(script in prop::collection::vec(gen_action(),3..12)) {
-        let mut seed = [4u8;16];
+    fn fuzz_roundtrip(script in prop::collection::vec(gen_action(),3..12)) {
+        let seed = [4u8;16];
         let mut r = XorShiftRng::from_seed(seed);
 
         let mut buf = vec![0;65536];
@@ -65,7 +61,7 @@ proptest! {
         let (s1,s2) = (ReadWrite::new(r1,w2), ReadWrite::new(r2,w1));
 
         let h = std::thread::spawn(move || {
-            nbd::server::transmission(s2, &mut c2);
+            let _ = nbd::server::transmission(s2, &mut c2);
             c2
         });
 
@@ -74,8 +70,8 @@ proptest! {
         for i in script {
             match i {
                 Action::Seek(pos) => {
-                    c1.seek(SeekFrom::Start(pos));
-                    c2.seek(SeekFrom::Start(pos));
+                    c1.seek(SeekFrom::Start(pos)).unwrap();
+                    c2.seek(SeekFrom::Start(pos)).unwrap();
                 },
                 Action::Write(mut sz) => {
                     if sz > (SS - c1.position()) as usize {
