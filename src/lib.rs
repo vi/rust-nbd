@@ -96,7 +96,7 @@ pub mod server {
     /// Export name is ignored, currently only one export is supported
     pub fn handshake<IO: Write + Read>(mut c: IO, export: &Export) -> Result<()> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
-        let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
+        let hs_flags = NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES;
 
         c.write_all(b"NBDMAGIC")?;
         c.write_all(b"IHAVEOPT")?;
@@ -105,7 +105,9 @@ pub mod server {
 
         let client_flags = c.read_u32::<BE>()?;
 
-        if client_flags != NBD_FLAG_C_FIXED_NEWSTYLE {
+        if client_flags != NBD_FLAG_C_FIXED_NEWSTYLE
+            && client_flags != (NBD_FLAG_C_FIXED_NEWSTYLE | NBD_FLAG_C_NO_ZEROES)
+        {
             strerror("Invalid client flag")?;
         }
 
@@ -146,7 +148,9 @@ pub mod server {
                         flags |= NBD_FLAG_SEND_TRIM
                     };
                     c.write_u16::<BE>(flags)?;
-                    c.write_all(&[0; 124])?;
+                    if client_flags & NBD_FLAG_C_NO_ZEROES == 0 {
+                        c.write_all(&[0; 124])?;
+                    }
                     c.flush()?;
                     return Ok(());
                 }
