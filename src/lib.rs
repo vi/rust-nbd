@@ -5,7 +5,8 @@
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
-
+// Let's support legacy rustc
+#![allow(bare_trait_objects)]
 extern crate byteorder;
 
 /// Information about an export (without name)
@@ -30,16 +31,19 @@ fn strerror(s: &'static str) -> std::io::Result<()> {
 }
 
 // based on https://doc.rust-lang.org/src/std/io/util.rs.html#48
-fn mycopy<R: ?Sized, W: ?Sized>(
+fn mycopy<R: ?Sized, W: ?Sized, UWO>(
     reader: &mut R,
-    writer: &mut W,
+    mut writer: &mut W,
     buf: &mut [u8],
     mut limit: usize,
+    before_first_write: UWO,
 ) -> ::std::io::Result<u64>
 where
     R: ::std::io::Read,
     W: ::std::io::Write,
+    UWO: FnOnce(&mut /*dyn*/ ::std::io::Write) -> ::std::io::Result<()>,
 {
+    let mut before_first_write = Some(before_first_write);
     let mut written = 0;
     loop {
         let to_read = buf.len().min(limit);
@@ -49,6 +53,9 @@ where
             Err(ref e) if e.kind() == ::std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
+        if let Some(bfw) = before_first_write.take() {
+            bfw(&mut writer)?;
+        }
         writer.write_all(&buf[..len])?;
         written += len as u64;
         //eprintln!("written={} limit={} len={}", written, limit, len);
@@ -182,14 +189,14 @@ pub mod server {
         }
     }
 
-    fn replyt<IO: Write + Read>(mut c: IO, error: u32, handle: u64) -> Result<()> {
+    fn replyt<IO: Write>(mut c: IO, error: u32, handle: u64) -> Result<()> {
         c.write_u32::<BE>(0x67446698)?;
         c.write_u32::<BE>(error)?;
         c.write_u64::<BE>(handle)?;
         Ok(())
     }
 
-    fn replyte<IO: Write + Read>(mut c: IO, error: Error, handle: u64) -> Result<()> {
+    fn replyte<IO: Write>(mut c: IO, error: Error, handle: u64) -> Result<()> {
         let ec = if let Some(x) = error.raw_os_error() {
             if (x as u32) != 0 {
                 x as u32
@@ -228,9 +235,34 @@ pub mod server {
                     if let Err(e) = data.seek(SeekFrom::Start(offset)) {
                         replyte(&mut c, e, handle)?;
                     } else {
-                        replyt(&mut c, 0, handle)?;
-                        match mycopy(&mut data, &mut c, &mut buf, length as usize) {
-                            Err(e) => replyte(&mut c, e, handle)?,
+                        let mut writing_in_progress = false;
+                        let ret;
+                        {
+                            // a hello from old borrowck
+                            let on_first_chunk = |c:&mut /*dyn*/ Write| {
+                            replyt(c, 0, handle)?;
+                            writing_in_progress = true;
+                            Ok(())
+                        };
+                            ret = mycopy(
+                                &mut data,
+                                &mut c,
+                                &mut buf,
+                                length as usize,
+                                on_first_chunk,
+                            );
+                        }
+                        match ret {
+                            Err(e) => {
+                                if writing_in_progress {
+                                    // Reading errors after already copying first chunk
+                                    // cannot be really handled, so aborting the entire connection
+                                    return Err(e);
+                                } else {
+                                    // Errors in the very first chunk can be non-fatal
+                                    replyte(&mut c, e, handle)?
+                                }
+                            }
                             Ok(x) if x == (length as u64) => {}
                             Ok(_) => {
                                 strerror("sudden EOF")?;
@@ -242,7 +274,8 @@ pub mod server {
                     if let Err(e) = data.seek(SeekFrom::Start(offset)) {
                         replyte(&mut c, e, handle)?;
                     } else {
-                        match mycopy(&mut c, &mut data, &mut buf, length as usize) {
+                        let ret = mycopy(&mut c, &mut data, &mut buf, length as usize, |_| Ok(()));
+                        match ret {
                             Err(e) => replyte(&mut c, e, handle)?,
                             Ok(x) if x == (length as u64) => {
                                 replyt(&mut c, 0, handle)?;
