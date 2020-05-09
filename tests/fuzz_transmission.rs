@@ -82,7 +82,7 @@ impl Seek for FakeStorage {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 500_000,
+        cases: 20_000,
         .. ProptestConfig::default()
     })]
 

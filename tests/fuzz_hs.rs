@@ -37,7 +37,7 @@ fn get_random_socket(chunks: Vec<Vec<u8>>) -> impl Read+Write {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 1_000_000,
+        cases: 10_000,
         .. ProptestConfig::default()
     })]
     

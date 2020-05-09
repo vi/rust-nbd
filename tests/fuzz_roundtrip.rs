@@ -43,7 +43,7 @@ fn gen_action() -> impl Strategy<Value = Action> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 10_000,
+        cases: 500,
         .. ProptestConfig::default()
     })]
     
