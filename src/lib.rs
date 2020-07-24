@@ -182,6 +182,9 @@ pub mod server {
                 NBD_OPT_GO => {
                     reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"")?;
                 }
+                NBD_OPT_STRUCTURED_REPLY => {
+                    reply(&mut c, clopt, NBD_REP_ERR_UNSUP, b"")?;
+                }
                 _ => {
                     strerror("Invalid client option type")?;
                 }
@@ -585,6 +588,7 @@ mod consts {
     pub const NBD_OPT_STARTTLS: u32 = 5;
     pub const NBD_OPT_INFO: u32 = 6;
     pub const NBD_OPT_GO: u32 = 7;
+    pub const NBD_OPT_STRUCTURED_REPLY: u32 = 8;
 
     pub const NBD_REP_ACK: u32 = 1;
     pub const NBD_REP_SERVER: u32 = 2;
