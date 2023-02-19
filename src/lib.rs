@@ -11,7 +11,7 @@ extern crate byteorder;
 
 /// Information about an export (without name)
 #[derive(Debug, Default, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Export {
+pub struct Export<Data = ()> {
     /// Size of the underlying data, in bytes
     pub size: u64,
     /// Tell client it's readonly
@@ -24,6 +24,8 @@ pub struct Export {
     pub send_trim: bool,
     /// Tell that NBD_CMD_FLUSH may be sent
     pub send_flush: bool,
+    /// Associated data for the export
+    pub data: Data,
 }
 
 fn strerror(s: &'static str) -> std::io::Result<()> {
@@ -101,7 +103,7 @@ pub mod server {
 
     /// Ignores incoming export name, accepts everything
     /// Export name is ignored, currently only one export is supported
-    pub fn handshake<IO: Write + Read>(mut c: IO, export: &Export) -> Result<()> {
+    pub fn handshake<IO: Write + Read, Data, F: FnOnce(&str) -> Result<Export<Data>>>(mut c: IO, exports: F) -> Result<Data> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
         let hs_flags = NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES;
 
@@ -138,6 +140,8 @@ pub mod server {
 
             match clopt {
                 NBD_OPT_EXPORT_NAME => {
+                    let export_name = std::str::from_utf8(&opt).map_err(|_| strerror("Non-UTF8 export name requested").unwrap_err())?;
+                    let export = exports(export_name)?;
                     c.write_u64::<BE>(export.size)?;
                     let mut flags = NBD_FLAG_HAS_FLAGS;
                     if export.readonly {
@@ -159,7 +163,7 @@ pub mod server {
                         c.write_all(&[0; 124])?;
                     }
                     c.flush()?;
-                    return Ok(());
+                    return Ok(export.data);
                 }
                 NBD_OPT_ABORT => {
                     reply(&mut c, clopt, NBD_REP_ACK, b"")?;
