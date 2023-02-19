@@ -101,8 +101,7 @@ pub mod server {
 
     pub use super::Export;
 
-    /// Ignores incoming export name, accepts everything
-    /// Export name is ignored, currently only one export is supported
+    /// Passes the requested export name to the provided callback to get the requested export
     pub fn handshake<IO: Write + Read, Data, F: FnOnce(&str) -> Result<Export<Data>>>(mut c: IO, exports: F) -> Result<Data> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
         let hs_flags = NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES;

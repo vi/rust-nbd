@@ -1,7 +1,7 @@
 rust-nbd
 ---
 
-[Network block device](https://en.wikipedia.org/wiki/Network_block_device) protocol implementation in Rust. For now, only one export and not all features are supported in server.
+[Network block device](https://en.wikipedia.org/wiki/Network_block_device) protocol implementation in Rust. Not all features are currently supported in server.
 
 Accepts a `Read`+`Write`+`Seek` as a data to be exposed in server mode. Provides `Read`+`Write`+`Seek` in client mode. Underlying connection is `Read`+`Write`, usage of `bufstream` crate is recommended.
 
