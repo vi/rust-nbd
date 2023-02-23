@@ -8,7 +8,9 @@ use nbd::server::{handshake, transmission, Export};
 fn handle_client(mut stream: TcpStream) -> Result<()> {
     let data = handshake(&mut stream, |name| {
         println!("requested export: {name}");
-        let data = name.repeat(1024).into_bytes();
+        let mut data = vec![0; 1_474_560];
+        let signature = format!("Name of the export requested by client: `{}`.", name).into_bytes();
+        data[0..signature.len()].copy_from_slice(&signature);
         Ok(Export {
             size: data.len() as u64,
             data,
