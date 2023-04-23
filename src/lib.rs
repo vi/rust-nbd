@@ -102,7 +102,10 @@ pub mod server {
     pub use super::Export;
 
     /// Passes the requested export name to the provided callback to get the requested export
-    pub fn handshake<IO: Write + Read, Data, F: FnOnce(&str) -> Result<Export<Data>>>(mut c: IO, exports: F) -> Result<Data> {
+    pub fn handshake<IO: Write + Read, Data, F: FnOnce(&str) -> Result<Export<Data>>>(
+        mut c: IO,
+        exports: F,
+    ) -> Result<Data> {
         //let hs_flags = NBD_FLAG_FIXED_NEWSTYLE;
         let hs_flags = NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES;
 
@@ -139,7 +142,8 @@ pub mod server {
 
             match clopt {
                 NBD_OPT_EXPORT_NAME => {
-                    let export_name = std::str::from_utf8(&opt).map_err(|_| strerror("Non-UTF8 export name requested").unwrap_err())?;
+                    let export_name = std::str::from_utf8(&opt)
+                        .map_err(|_| strerror("Non-UTF8 export name requested").unwrap_err())?;
                     let export = exports(export_name)?;
                     c.write_u64::<BE>(export.size)?;
                     let mut flags = NBD_FLAG_HAS_FLAGS;
@@ -245,11 +249,11 @@ pub mod server {
                         let ret;
                         {
                             // a hello from old borrowck
-                            let on_first_chunk = |c:&mut /*dyn*/ Write| {
-                            replyt(c, 0, handle)?;
-                            writing_in_progress = true;
-                            Ok(())
-                        };
+                            let on_first_chunk = |c: &mut /*dyn*/ Write| {
+                                replyt(c, 0, handle)?;
+                                writing_in_progress = true;
+                                Ok(())
+                            };
                             ret = mycopy(
                                 &mut data,
                                 &mut c,
