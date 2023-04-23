@@ -56,8 +56,9 @@ proptest! {
     #[test]
     fn fuzz_server_hs(chunks in prop::collection::vec(gen_chunk(),3..12)) {
         let s = get_random_socket(chunks);
-        let exp = nbd::server::Export::default();
-        let ret = nbd::server::handshake(s, &exp);
+        let ret = nbd::server::handshake(s, |_| {
+            Ok(nbd::server::Export::<()>::default())
+        });
         if let Ok(x) = ret {
             eprintln!("Happy case {:?}", x);
         } else {
